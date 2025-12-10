@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="utf-8" />
+  <title>WebGIS Produksi</title>
+
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+
+  <!-- Leaflet Search CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet-control-search/dist/leaflet-control-search.min.css" />
+
+  <style>
+    html, body, #map { height: 100%; margin: 0; padding: 0; }
+    #map { width: 100%; height: 100vh; }
+
+    .legend {
+      background: rgba(255,255,255,0.95);
+      padding: 10px;
+      border-radius: 8px;
+      box-shadow: 0 0 6px rgba(0,0,0,0.2);
+      font-size: 13px;
+      line-height: 18px;
+    }
+
+    .legend .item { 
+      margin-bottom:5px; 
+      display:flex; 
+      align-items:center; 
+    }
+
+    .legend .swatch {
+      width:18px; 
+      height:18px; 
+      margin-right:8px; 
+      border:1px solid #000;
+    }
+
+    .leaflet-control-search {
+      z-index: 9999 !important;
+    }
+  </style>
+</head>
+
+<body>
+<div id="map"></div>
+
+<!-- JS -->
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet-control-search/dist/leaflet-control-search.min.js"></script>
+
+<script>
+
+const baseMaps = {
+  "Satellite": L.tileLayer(
+    "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", 
+    { maxZoom: 20, attribution: "Esri" }
+  ),
+
+  "OpenStreetMap": L.tileLayer(
+    "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+    { maxZoom: 20, attribution: "© OpenStreetMap" }
+  )
+};
+
+// Map default = satellite
+const map = L.map("map", {
+  center: [0.35, 112.9],
+  zoom: 12,
+  layers: [baseMaps["Satellite"]]
+});
+
+let blokLayer, estateLayer;
+
+const overlays = {};  
+const layerControl = L.control.layers(baseMaps, overlays, { collapsed: false }).addTo(map);
+
+
+// ---------------- COLOR FUNCTION ----------------
+function getColor(code) {
+  switch (String(code || "")) {
+    case "E": return "#0077FF";
+    case "G": return "#00CC44";
+    case "NI": return "#FFFF00";
+    case "US": return "#FF0000";
+    case "Tdk Pnn": return "#000000";
+    case "No Bgt": return "transparent";
+    default: return "#CCCCCC";
+  }
+}
+
+function readProp(f, k) { return f?.properties?.[k] ?? "-"; }
+
+
+// ---------------- LOAD ESTATE FIRST ----------------
+fetch("./data/data.geojson.layer.geojson")
+.then(r => r.json())
+.then(data => {
+
+  estateLayer = L.geoJson(data, {
+    style: { color: "#000", weight: 1.2, fillOpacity: 0 },
+    onEachFeature: (f, layer) =>
+      layer.bindPopup(`<b>Estate:</b> ${readProp(f,"ESTATE")}<br><b>Code:</b> ${readProp(f,"OCCODE")}`)
+  }).addTo(map);
+
+  overlays["Estate Boundary"] = estateLayer;
+  layerControl.addOverlay(estateLayer, "Estate Boundary");
+});
+
+
+// ---------------- LOAD BLOK ----------------
+fetch("./data/data.geojson")
+.then(r => r.json())
+.then(data => {
+
+  blokLayer = L.geoJson(data, {
+    style: f => ({
+      fillColor: getColor(readProp(f,"SIGN")),
+      color: "#000",
+      weight: .6,
+      fillOpacity: getColor(readProp(f,"SIGN")) === "transparent" ? 0 : 0.45
+    }),
+
+    onEachFeature: function (feature, layer) {
+
+    // Format angka desimal
+    const formatNumber = (value) => {
+        if (value === null || value === undefined || value === "" || isNaN(value)) return "-";
+        return Number(value).toFixed(2);
+    };
+
+    // Ambil dan format nilai
+    const HA = formatNumber(feature.properties.HA);
+    const BGT_THA = formatNumber(feature.properties.BGT_THA);
+    const AKT_THA = formatNumber(feature.properties.AKT_THA);
+
+    // Popup template
+    layer.bindPopup(`
+        <b>BLOK:</b> ${feature.properties.BLOK}<br>
+        <b>Tahun Tanam:</b> ${feature.properties.TT}<br>
+        <b>Hektar:</b> ${HA}<br>
+        <b>Budget THA:</b> ${BGT_THA}<br>
+        <b>Aktual THA:</b> ${AKT_THA}
+    `);
+    }
+  }).addTo(map);
+
+  overlays["Blok Produksi"] = blokLayer;
+  layerControl.addOverlay(blokLayer, "Blok Produksi");
+
+  map.fitBounds(blokLayer.getBounds());
+
+  // Search
+  new L.Control.Search({
+    layer: blokLayer,
+    propertyName: "searchKey",
+    marker: false,
+    moveToLocation: (latlng, title, map) => map.setView(latlng, 17),
+    textPlaceholder: "Cari Company / Estate / Blok..."
+  }).addTo(map);
+
+});
+
+
+// ---------------- LEGEND ----------------
+const legend = L.control({ position: "bottomright" });
+legend.onAdd = () => {
+  const div = L.DomUtil.create("div", "legend");
+  div.innerHTML = `
+    <b>Legenda</b><br>
+    <div class="item"><div class="swatch" style="background:${getColor("E")}"></div>Excellent (E)</div>
+    <div class="item"><div class="swatch" style="background:${getColor("G")}"></div>Good (G)</div>
+    <div class="item"><div class="swatch" style="background:${getColor("NI")}"></div>Need Improvement (NI)</div>
+    <div class="item"><div class="swatch" style="background:${getColor("US")}"></div>Unsatisfactory (US)</div>
+    <div class="item"><div class="swatch" style="background:${getColor("Tdk Pnn")}"></div>Tidak Panen</div>
+    <div class="item"><div class="swatch" style="border:1px dashed #333;background:transparent"></div>No Budget</div>
+  `;
+  return div;
+};
+legend.addTo(map);
+
+</script>
+
+</body>
+</html>
